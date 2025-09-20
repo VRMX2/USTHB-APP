@@ -1,56 +1,55 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const http = require('http');
-const socketIo = require('socket.io');
-require('dotenv').config();
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import mongoose from 'mongoose';
+import http from 'http';
+import socketIo from 'socket.io';
+import path from 'path';
+import "dotenv/config";
 
-// Import routes
-const authRoutes = require('./routes/auth');
-const courseRoutes = require('./routes/courses');
-const announcementRoutes = require('./routes/announcements');
-const chatRoutes = require('./routes/chat');
-const gradeRoutes = require('./routes/grades');
-const aiRoutes = require('./routes/ai');
 
-// Import socket service
-const socketService = require('./services/socketService');
+import authRoutes from './routes/auth';
+import courseRoutes from './routes/courses';
+import announcementRoutes from './routes/announcements';
+import chatRoutes from './routes/chat';
+import gradeRoutes from './routes/grades';
+import aiRoutes from './routes/ai';
+// Import services
+import socketService from './services/socketService'
+// Import database configuration
+import connectDB from './config/database';
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
-
-// Security middleware
-app.use(helmet());
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use('/api/', limiter);
 
 // CORS configuration
-app.use(cors({
+const corsOptions = {
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://yourdomain.com'] 
+    ? ['https://yourapp.com'] 
     : ['http://localhost:3000', 'http://localhost:19006'],
-  credentials: true
-}));
+  credentials: true,
+  optionsSuccessStatus: 200
+};
 
-// Body parser middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Middleware
+app.use(helmet());
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Static files
-app.use('/uploads', express.static('uploads'));
+// Static files for uploads
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Connect to MongoDB
+connectDB();
+
+// Initialize Socket.IO
+const io = socketIo(server, {
+  cors: corsOptions
+});
+
+// Initialize socket service
+socketService.initializeSocket(io);
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -62,18 +61,17 @@ app.use('/api/ai', aiRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+  res.status(200).json({ 
+    message: 'USTHB App Server is running!',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV 
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({
-    success: false,
+  res.status(500).json({ 
     message: 'Something went wrong!',
     error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
   });
@@ -81,40 +79,22 @@ app.use((err, req, res, next) => {
 
 // 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found'
-  });
+  res.status(404).json({ message: 'Route not found' });
 });
 
-// Socket.IO integration
-socketService.initializeSocket(io);
+const PORT = process.env.PORT || 5000;
 
-// Database connection
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => {
-    console.log('✅ Connected to MongoDB');
-    
-    // Start server
-    const PORT = process.env.PORT || 5000;
-    server.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`📱 Environment: ${process.env.NODE_ENV}`);
-    });
-  })
-  .catch((error) => {
-    console.error('❌ MongoDB connection error:', error);
-    process.exit(1);
-  });
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📱 USTHB Faculty App Backend Started`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+});
 
-// Handle graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('🛑 Gracefully shutting down...');
-  await mongoose.connection.close();
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
   server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
+    console.log('Process terminated');
+    mongoose.connection.close();
   });
 });
-
-module.exports = { app, server, io };
